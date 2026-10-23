@@ -1,25 +1,30 @@
 .ezdl-wrapper, .ezdl-wrapper * { box-sizing: border-box; }
 
-/* Wrapper stuck to the absolute right bezel */
+/* Wrapper stuck to a side bezel; JS sets `top` (and the side) from the saved/dragged position */
 .ezdl-wrapper {
   position: fixed;
-  right: 0px;
-  top: 50%;
-  transform: translateY(-50%);
+  right: 0;
+  top: 40vh;
+  width: 30px;
+  height: 36px;
   z-index: 2147483647;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   display: flex;
   align-items: center;
 }
+.ezdl-wrapper.ezdl-left { right: auto; left: 0; }
+.ezdl-wrapper.ezdl-snapping { transition: left 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.15); }
+.ezdl-wrapper.ezdl-dragging { transition: none; }
 
-/* Idle floating animation */
+/* Idle floating animation (uses `translate` so it doesn't fight the hover `transform: scale`) */
 @keyframes ezdl-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-5px); }
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -5px; }
 }
 
-/* Tiny half-circle pill hugging the right edge */
+/* Tiny half-circle pill hugging the screen edge */
 .ezdl-ball {
+  flex: none;
   width: 30px;
   height: 36px;
   border-radius: 18px 0 0 18px;
@@ -32,12 +37,23 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   box-shadow: -3px 4px 14px rgba(120, 80, 180, 0.18);
   animation: ezdl-float 2.5s ease-in-out infinite;
-  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s, width 0.2s;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s;
   user-select: none;
-  padding-left: 3px;
+  -webkit-user-select: none;
+  padding: 0 0 0 3px;
+}
+
+/* Mirrored when parked on the left edge */
+.ezdl-left .ezdl-ball {
+  border-radius: 0 18px 18px 0;
+  border: 1px solid rgba(160, 110, 220, 0.4);
+  border-left: none;
+  box-shadow: 3px 4px 14px rgba(120, 80, 180, 0.18);
+  padding: 0 3px 0 0;
 }
 
 .ezdl-wrapper:hover .ezdl-ball {
@@ -45,22 +61,28 @@
   transform: scale(1.15);
 }
 
+/* While being dragged: becomes a full pill, follows the cursor */
+.ezdl-wrapper.ezdl-dragging .ezdl-ball {
+  animation: none;
+  cursor: grabbing;
+  transform: scale(1.12);
+  border: 1px solid rgba(140, 80, 210, 0.55);
+  border-radius: 18px;
+  padding: 0;
+  box-shadow: 0 10px 24px rgba(120, 80, 180, 0.3);
+}
+
 .ezdl-ball--active {
   background: rgba(235, 215, 255, 0.95);
   border-color: rgba(140, 80, 210, 0.55);
 }
 
-.ezdl-ball--sad {
-  background: rgba(248, 243, 255, 0.9);
-  opacity: 0.9;
-}
-
-/* Bubble pop animation & Light Purple Glassmorphism Box */
+/* ---------- Download popup (light purple glass) ---------- */
 .ezdl-popup {
   position: absolute;
   right: 36px;
-  top: 50%;
-  transform: translateY(-50%) scale(0.3) translateX(25px);
+  top: 0; /* JS centres it on the ball and keeps it inside the window */
+  transform: scale(0.3) translateX(25px);
   transform-origin: right center;
   width: 300px;
   max-height: 80vh;
@@ -79,12 +101,17 @@
   pointer-events: none;
   transition: opacity 0.2s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), visibility 0.2s;
 }
+.ezdl-left .ezdl-popup {
+  right: auto;
+  left: 36px;
+  transform: scale(0.3) translateX(-25px);
+}
 
 .ezdl-wrapper.ezdl-open .ezdl-popup {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
-  transform: translateY(-50%) scale(1) translateX(0);
+  transform: scale(1) translateX(0);
 }
 
 .ezdl-head {
@@ -191,6 +218,15 @@
 .ezdl-btn-sub { font-size: 10px; opacity: 0.75; color: #685085; }
 .ezdl-btn--primary .ezdl-btn-sub { color: rgba(255, 255, 255, 0.85); }
 
+/* small "(your system)" beside the matching 32/64-bit option */
+.ezdl-you {
+  margin-left: 6px;
+  color: #267538;
+  font-size: 10px;
+  font-weight: 600;
+}
+.ezdl-btn--primary .ezdl-you { color: rgba(255, 255, 255, 0.92); }
+
 .ezdl-foot {
   display: flex;
   align-items: center;
@@ -206,11 +242,51 @@
 .ezdl-foot a { color: #6f34c9; text-decoration: none; font-weight: 600; }
 .ezdl-foot a:hover { text-decoration: underline; }
 
-/* Sad/No-App Popup State */
-.ezdl-no-app {
-  padding: 20px 16px;
-  text-align: center;
+/* ---------- Nothing to download: a small note slides in from the edge, then back out ---------- */
+.ezdl-sad { pointer-events: none; }
+
+.ezdl-notice {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px 0 12px;
+  border: 1px solid rgba(160, 110, 220, 0.4);
+  border-right: none;
+  border-radius: 18px 0 0 18px;
+  background: rgba(252, 249, 255, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #4a2875;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: -3px 4px 14px rgba(120, 80, 180, 0.18);
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
-.ezdl-sad-icon { font-size: 30px; display: block; margin-bottom: 6px; }
-.ezdl-sad-title { font-size: 13px; font-weight: 700; color: #4a2875; margin-bottom: 4px; }
-.ezdl-sad-desc { font-size: 11px; color: #7a6296; margin: 0; line-height: 1.3; }
+.ezdl-notice-icon { font-size: 16px; line-height: 1; }
+.ezdl-notice--in { transform: translateX(0); }
+
+/* Mirrored if the ball lives on the left edge */
+.ezdl-left .ezdl-notice {
+  right: auto;
+  left: 0;
+  padding: 0 12px 0 14px;
+  border: 1px solid rgba(160, 110, 220, 0.4);
+  border-left: none;
+  border-radius: 0 18px 18px 0;
+  box-shadow: 3px 4px 14px rgba(120, 80, 180, 0.18);
+  transform: translateX(-100%);
+}
+.ezdl-left .ezdl-notice--in { transform: translateX(0); }
+
+/* Respect "reduce motion": fade instead of slide */
+@media (prefers-reduced-motion: reduce) {
+  .ezdl-ball { animation: none; }
+  .ezdl-notice, .ezdl-left .ezdl-notice { transform: none; opacity: 0; transition: opacity 0.2s; }
+  .ezdl-notice--in, .ezdl-left .ezdl-notice--in { opacity: 1; }
+}

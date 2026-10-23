@@ -113,17 +113,55 @@
       .sort((a, b) => b.s - a.s || b.c.prio - a.c.prio || b.c.size - a.c.size)[0]?.c;
   }
 
+  // ---------- Per-OS rows: every CPU variant is listed, the visitor's own is flagged ----------
+  const ARCH_LABEL = { x64: '64-bit', x86: '32-bit', arm64: 'ARM64', arm32: 'ARM 32-bit', universal: 'Universal', any: '' };
+  const ARCH_ORDER = ['x64', 'x86', 'arm64', 'universal', 'any', 'arm32'];
+
+  // Best file for each CPU type inside one group (same OS + kind, and same format for Linux installers).
+  function perArch(list, os) {
+    const byArch = new Map();
+    for (const c of list) {
+      if (c.arch === 'arm32' && os !== 'linux') continue;
+      const cur = byArch.get(c.arch);
+      if (!cur || c.prio > cur.prio || (c.prio === cur.prio && c.size > cur.size)) byArch.set(c.arch, c);
+    }
+    if (byArch.has('x64')) byArch.delete('any'); // an unlabeled build next to an x64 one is almost always the same thing
+    return [...byArch.values()];
+  }
+
+  // Flag the pick that suits the visitor's machine (only on their own OS) and list it first.
+  function orderPicks(picks, user, os) {
+    let best = null;
+    let bestScore = -1;
+    if (os === user.os) {
+      for (const c of picks) {
+        const s = archScore(c.arch, user.arch);
+        if (os === 'linux' && s < 1.5) continue; // Windows/macOS can emulate other CPUs; Linux can't
+        if (s > bestScore) { bestScore = s; best = c; }
+      }
+    }
+    return picks
+      .map((c) => ({ ...c, mine: c === best, choice: picks.length > 1 }))
+      .sort((a, b) => (b.mine - a.mine) || ARCH_ORDER.indexOf(a.arch) - ARCH_ORDER.indexOf(b.arch));
+  }
+
   // Mac users often don't know their chip, so show both unless a universal build exists.
   function macPicks(list, user) {
-    const uni = list.filter((c) => c.arch === 'universal');
-    if (uni.length) return [{ ...bestFor(uni, 'universal'), label: 'macOS' }];
+    const onMac = user.os === 'mac';
+    const uni = bestFor(list.filter((c) => c.arch === 'universal'), 'universal');
+    if (uni) return [{ ...uni, label: 'macOS', mine: onMac, choice: false }];
+
     const arm = bestFor(list.filter((c) => c.arch === 'arm64'), 'arm64');
     const intel = bestFor(list.filter((c) => c.arch !== 'arm64'), 'x64');
-    const out = (user.os === 'mac' && user.arch === 'x64' ? [intel, arm] : [arm, intel]).filter(Boolean);
-    return out.map((c) => ({
-      ...c,
-      label: out.length > 1 ? (c.arch === 'arm64' ? 'Apple Silicon' : 'Intel') : c.arch === 'arm64' ? 'Apple Silicon' : 'macOS',
-    }));
+    const out = [arm, intel].filter(Boolean);
+    const both = out.length > 1;
+    return out
+      .map((c) => {
+        const isArm = c.arch === 'arm64';
+        const mine = onMac && (both ? isArm === (user.arch === 'arm64') : !isArm || user.arch === 'arm64');
+        return { ...c, label: isArm ? 'Apple Silicon' : both ? 'Intel' : 'macOS', mine, choice: both };
+      })
+      .sort((a, b) => b.mine - a.mine);
   }
 
   const LINUX_NAMES = {
@@ -145,28 +183,33 @@
     else if (c.os === 'linux' && c.kind === 'installer') title = LINUX_NAMES[c.format] || 'Installer';
     else if (c.format === 'appimage') title = 'Portable (AppImage)';
     else title = c.kind === 'portable' ? 'Portable' : 'Installer';
-    if (c.arch === 'arm64' && c.os !== 'mac') title += ' (ARM)';
-    return { title, sub: [c.extLabel, fmtSize(c.size)].filter(Boolean).join(' · '), url: c.url, kind: c.kind };
+    if (!c.label && ARCH_LABEL[c.arch]) title += ` \u00b7 ${ARCH_LABEL[c.arch]}`;
+    return {
+      title,
+      sub: [c.extLabel, fmtSize(c.size)].filter(Boolean).join(' \u00b7 '),
+      url: c.url,
+      kind: c.kind,
+      mine: Boolean(c.mine),
+      choice: Boolean(c.choice),
+    };
   }
 
   function rowsFor(os, list, user) {
-    const target = user.os === os ? user.arch : 'x64';
-    const picks = [];
+    const rows = [];
     for (const kind of ['installer', 'portable']) {
       const ofKind = list.filter((c) => c.kind === kind);
       if (!ofKind.length) continue;
-      if (os === 'mac') picks.push(...macPicks(ofKind, user));
+      if (os === 'mac') rows.push(...macPicks(ofKind, user));
       else if (os === 'linux' && kind === 'installer') {
         for (const fmt of Object.keys(LINUX_NAMES)) {
-          const p = bestFor(ofKind.filter((c) => c.format === fmt), target);
-          if (p) picks.push(p);
+          const group = ofKind.filter((c) => c.format === fmt);
+          if (group.length) rows.push(...orderPicks(perArch(group, os), user, os));
         }
       } else {
-        const p = bestFor(ofKind, target);
-        if (p) picks.push(p);
+        rows.push(...orderPicks(perArch(ofKind, os), user, os));
       }
     }
-    return picks.slice(0, 5).map(toRow);
+    return rows.slice(0, 8).map(toRow);
   }
 
   // ---------- Public: release -> UI model (or null if not an app) ----------
@@ -190,5 +233,24 @@
     return { tag: release.tag, url: release.url, published: release.published, sections };
   }
 
-  globalThis.EZDL = { CONFIG, classify, appScore, buildModel };
+  // ---------- Visitor detection (pure, so it can be tested) ----------
+  // Chrome reports architecture "x86" for BOTH 32- and 64-bit Intel/AMD; `bitness` tells them apart.
+  function userFromHints({ platform = '', ua = '', architecture = '', bitness = '' } = {}) {
+    const plat = platform.toLowerCase();
+    let os = null;
+    if (plat.includes('windows') || /Windows/.test(ua)) os = 'windows';
+    else if (plat.includes('mac') || /Macintosh|Mac OS X/.test(ua)) os = 'mac';
+    else if (/Android/.test(ua)) os = null;
+    else if (plat.includes('linux') || /Linux|X11|CrOS/.test(ua)) os = 'linux';
+
+    let arch;
+    if (architecture === 'arm') arch = bitness === '32' ? 'arm32' : 'arm64';
+    else if (architecture === 'x86') arch = bitness === '32' ? 'x86' : 'x64';
+    else if (os === 'windows') arch = /Win64|WOW64|x64|amd64/i.test(ua) ? 'x64' : 'x86'; // no client hints: use the UA string
+    else if (os === 'mac') arch = 'arm64'; // can't be told from the UA; most Macs in use are Apple Silicon
+    else arch = 'x64';
+    return { os, arch };
+  }
+
+  globalThis.EZDL = { CONFIG, classify, appScore, buildModel, userFromHints };
 })();

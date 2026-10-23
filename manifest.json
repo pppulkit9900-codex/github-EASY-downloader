@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Easy Download",
+  "version": "0.1.0",
+  "description": "Shows clean one-click Windows, macOS and Linux downloads (installer + portable) on GitHub repos that are real desktop apps.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.github.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["core.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
